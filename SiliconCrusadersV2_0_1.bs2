@@ -1,0 +1,309 @@
+' {$STAMP BS2}
+' {$PBASIC 2.5}
+' code writen by the Spectald Vezerk
+'for Team SiliconCrusaders
+'v2.0.1
+
+'changelog:
+'-robot now pivots on line checking both qtis instead of continuing forward if one is stuck on line
+'-added lcd support funcs
+'-added method of finding a line and sticking to it
+'qtis replaced by qtisr and qrisl, mtr funcs for backwrd likewise expanded as well
+
+'io map:
+Rqti pin 15
+Lqti pin 14
+
+Rmtr pin 13
+Lmtr pin 12
+
+led0 pin 3
+led1 pin 2
+
+lcd_CS    pin 4    'active low
+spi_CLK   pin 5    'l to h transition latches DAT
+spi_DAT   pin 6    'data
+spi_DC    pin 7    '1=Data, 0=CMD
+spi_reset pin 8    'act low
+
+'tables
+LCD_init Data $20,$c0,$07,$13,$20,$0c,$00   'starts by toggling reset, if00 then end
+'lcdChar tables below code array of, for entire screen we need 63
+
+'lcd_nameTable
+'LCD_nameT var byte()
+
+'vars
+qtisr var nib
+qtisl var nib
+movParam var nib
+index    var word
+paststate var bit
+x         var byte
+
+param1 var byte  'subroutine param
+addr   var word
+
+
+main:
+  'setup states
+  High Rqti
+  High Lqti
+  High led0
+  High led1
+  High lcd_CS 'disable lcd
+  Low spi_CLK
+  High spi_reset
+  Pause 20
+  Low spi_reset
+  Pause 20
+  High spi_reset 'spi devices reset
+
+
+
+
+
+  Gosub init_lcd
+  Gosub LcdDemo
+
+  Gosub find_line
+  Gosub mainloop
+
+
+
+mainloop:
+  Gosub UpdateQtiS
+  'qtis now has state of qtis. if tape then 1
+
+  If ((qtisl = 0) and (qtisr = 0)) Then
+    Gosub lmtrf
+    Gosub rmtrf
+  Else
+    'else one of qtis is activated
+    'if qtisl then lmtrb and rmtrf
+    'if qtisr then rmtrb and lmtrf
+    If ((qtisl = 1) and (qtisr = 1)) Then
+      'take a passage
+    Elseif (qtisl = 1)Then
+      Gosub lmtrb
+      Gosub rmtrf
+    Elseif (qtisr = 1)Then
+
+
+      Gosub rmtrb
+      Gosub lmtrf
+    Endif
+  Endif
+
+  Goto mainloop
+
+
+
+
+
+'----------------func calls--------------------------------
+find_line:
+  'movParam = %lr
+  'move forward until qtis != 00
+  Do While ((qtisr = 0) and (qtisl = 0))
+    Gosub lmtrf
+    Gosub rmtrf
+    Gosub UpdateQtiS
+  Loop
+
+
+
+  'now if qtisl = 1 then move qtisr until incrementing to 2
+  index = 0
+  If (qtisl = 1) Then
+    'move right motor incrementing index when seeing a 0 to 1 transition
+    Do While (index < 3)
+      Gosub UpdateQtiS
+        If (paststate = qtisr) Then
+          'no change
+          'continue moving right mtr
+          For x=0 To 20
+              Gosub rmtrf
+          Next
+
+        Else
+          'else a change
+          'increment index and set paststate to qtisr
+          index = index + 1
+          paststate = qtisr
+        Endif
+    Loop
+
+  Elseif (qtisr = 1) Then
+    'move right motor incrementing index when seeing a 0 to 1 transition
+    Do While (index < 3)
+      Gosub UpdateQtiS
+        If (paststate = qtisl) Then
+          'no change
+          'continue moving right mtr
+          For x=0 To 20
+              Gosub lmtrf
+          Next
+
+        Else
+          'else a change
+          'increment index and set paststate to qtisr
+          index = index + 1
+          paststate = qtisl
+        Endif
+    Loop
+  Endif
+  Return
+
+
+LmtrF:
+  Pulsout lmtr, 780  'left
+  Return
+
+RmtrF:
+  Pulsout rmtr, 720  'left
+  Return
+
+LmtrB:
+  Pulsout lmtr, 720  'left
+  Return
+
+RmtrB:
+  Pulsout rmtr, 780  'left
+  Return
+
+
+
+UpdateQtiS:
+  'updates QtiState
+  High Rqti
+  High Lqti
+  Pause 2
+  Input Rqti
+  Pause 0
+  Pause 0
+  Pause 0   'add more delay to increase distance/sensitivity
+  qtisr = Rqti
+  Input Lqti
+  Pause 0
+  Pause 0
+  Pause 0
+  qtisl = Lqti
+
+  'QtiS = %xxlr
+
+
+
+
+  Return
+
+
+
+init_lcd:
+  'lcd_CS   pin 4    'active low
+  'spi_CLK  pin 5    'l to h transition latches DAT
+  'spi_DAT  pin 6    'data
+  'spi_DC   pin 7    '1=Data, 0=CMD (for lcd)
+  'spi_reset pin 8    'act low
+
+  'stream in reset seequence
+   'lcd enabled, clk is already low
+  'now stream in bytes until 00 from LCD_init
+  addr = lcd_init                'addr is start of block to send as cmd
+  Low lcd_CS
+  Gosub lcd_CMDwriteBlock
+
+  param1 = %01000000
+  Gosub lcd_cwrite
+
+  param1 = %10000000
+  Gosub lcd_cwrite
+
+loopwriting:
+  param1 = %00000000                'param1 is byte to be sent
+  High spi_DC
+  For index = 0 To 503
+    Shiftout spi_DAT, spi_CLK, MSBFIRST, [param1]
+  Next
+  High spi_DC
+
+  'addr = test
+  'Gosub lcd_DATwriteBlock
+
+  'index = 0
+  'Do While (index < 84)
+    'param1 = %00000000                'param1 is byte to be sent
+    'Gosub lcd_dwrite
+    'index = index + 1
+  'Loop
+  param1 = $ff                'param1 is byte to be sent
+  High spi_DC
+  For index = 0 To 503
+    Shiftout spi_DAT, spi_CLK, MSBFIRST, [param1]
+  Next
+
+
+  'Goto loopwriting
+
+  High lcd_CS
+  Return
+
+
+LcdDemo:
+
+  Return
+
+
+lcd_CMDwriteBlock:
+  Read addr, param1     'reads from address param1, puts in param2
+  If (param1 = $00) Then
+    Return
+  Else
+    Gosub lcd_cwrite
+    addr = addr + 1
+  Endif
+  Goto lcd_CMDwriteBlock
+
+lcd_DATwriteBlock:
+  Read addr, param1     'reads from address param1, puts in param2
+  If (param1 = $F0) Then
+    addr = addr + 1
+    Read addr, param1
+    If (param1 = $99) Then
+      Return
+    Else
+      addr = addr - 1
+      Read addr, param1
+    Endif
+  Else
+    Gosub lcd_dwrite
+    addr = addr + 1
+  Endif
+  Goto lcd_DATwriteBlock
+
+lcd_dwrite:
+  'Low lcd_CS
+  'High spi_DC
+  'Shiftout spi_DAT, spi_CLK, MSBFIRST, [param1]
+  'High lcd_CS
+  Return
+
+lcd_cwrite:
+  'Low lcd_CS
+  Low spi_DC
+  Shiftout spi_DAT, spi_CLK, MSBFIRST, [param1]
+  'High lcd_CS
+  Return
+
+spi_write:
+
+  Return
+
+
+
+
+
+'tables for lcd bitmaps start at $0200
+
+test Data $ff,%10101010,%10101010,%10101010,%10101010,%10101010,%10101010, %10101010,
+          %10101010,%10101010,%10101010,%10101010,%10101010,%10101010,%10101010,%10101010,$F0,$99   'starts by toggling reset, if00 then end
