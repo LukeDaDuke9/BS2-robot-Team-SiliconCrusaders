@@ -1,0 +1,554 @@
+' {$STAMP BS2}
+' {$PBASIC 2.5}
+' code writen by the Spectald Vezerk
+'for Team SiliconCrusaders
+'v2.1.2
+
+'changelog:
+'-robot now pivots on line checking both qtis instead of continuing forward if one is stuck on line
+'-added lcd support funcs
+'-added method of finding a line and sticking to it
+'qtis replaced by qtisr and qrisl, mtr funcs for backwrd likewise expanded as well
+
+'io map:
+Rqti pin    15
+Lqti pin    14
+
+Rmtr pin    13
+Lmtr pin    12
+
+wiskers pin 11
+pizo    pin 11
+
+led0 pin    10
+spi_DC    pin  9    '1=Data, 0=CMD
+spi_writeb pin 8
+'OUTL 0-7 used by PISO
+
+'commands:
+StartSTR Data "START"
+
+
+'lcd_nameTable
+'LCD_nameT var byte()
+
+'vars
+qtisr var nib
+qtisl var nib
+movParam var nib
+index    var word
+index2   var word
+paststate var bit
+x         var byte
+pattern   var byte
+SerBuff   var Byte(5)
+
+param1 var byte
+param2 var byte
+addr   var word
+
+
+
+main:
+  'setup states
+  High Rqti
+  High Lqti
+  High led0
+  High spi_writeb
+  dirl = $ff
+
+  Debug "bs2 Init Complete", $0D, $0A
+  Freqout pizo, 500, 2000
+  Pause 500
+
+  Pause 400
+  Gosub init_lcd
+
+
+  Debug "Lauching Splash...", $0D, $0A
+  Gosub LcdDemo
+waitforStart:
+  Gosub WaitForCMD   'cmd is returned in param1
+  'next we set addr to address of the string we want to detect, if equal then x = 1, if not x = 0
+  addr = StartSTR
+  Gosub checkCMD
+  Debug "data is "
+  Debug ? x
+  If (x = 0) Then Goto waitforStart
+
+  Freqout pizo, 3000, 2000
+
+
+  Debug "Finding Line...", $0D, $0A
+  Gosub find_line
+  Debug "Mainloop()", $0D, $0A
+  Gosub mainloop
+
+
+
+mainloop:
+  Gosub UpdateQtiS
+  'qtis now has state of qtis. if tape then 1
+
+  If ((qtisl = 0) and (qtisr = 0)) Then
+    Gosub lmtrf
+    Gosub rmtrf
+  Else
+    'else one of qtis is activated
+    'if qtisl then lmtrb and rmtrf
+    'if qtisr then rmtrb and lmtrf
+    If ((qtisl = 1) and (qtisr = 1)) Then
+      'take a passage
+    Elseif (qtisl = 1)Then
+      Gosub lmtrb
+      Gosub rmtrf
+    Elseif (qtisr = 1)Then
+      Gosub rmtrb
+      Gosub lmtrf
+    Endif
+  Endif
+
+
+  'check for serial data/cmds
+
+
+
+  Goto mainloop
+
+
+
+
+
+
+
+
+
+
+
+
+
+'----------------func calls--------------------------------
+WaitForCMD:
+
+  Serin 16, 84, [str param1\5\13]
+  Debug LF, CR
+  Debug "data received: ", STR param1, CR
+Return
+
+
+checkCMD:
+  x = 1 'prove it is until its not
+  For index = 0 To 4   'search first 5 chars
+    Read (addr + index), param2
+    If (param1(index) <> param2) Then
+      If (param1(index) = 13) Then
+        Exit
+      Else
+        x = 0     'statement false, exit
+        Exit
+      Endif
+    Endif
+  Next
+
+Return
+
+
+find_line:
+  'movParam = %lr
+  'move forward until qtis != 00
+  Do While ((qtisr = 0) and (qtisl = 0))
+    Gosub lmtrf
+    Gosub rmtrf
+    Gosub UpdateQtiS
+  Loop
+
+
+
+  'now if qtisl = 1 then move qtisr until incrementing to 2
+  index = 0
+  If (qtisl = 1) Then
+    'move right motor incrementing index when seeing a 0 to 1 transition
+    Do While (index < 3)
+      Gosub UpdateQtiS
+        If (paststate = qtisr) Then
+          'no change
+          'continue moving right mtr
+          For x=0 To 20
+              Gosub rmtrf
+          Next
+
+        Else
+          'else a change
+          'increment index and set paststate to qtisr
+          index = index + 1
+          paststate = qtisr
+        Endif
+    Loop
+
+  Elseif (qtisr = 1) Then
+    'move right motor incrementing index when seeing a 0 to 1 transition
+    Do While (index < 3)
+      Gosub UpdateQtiS
+        If (paststate = qtisl) Then
+          'no change
+          'continue moving right mtr
+          For x=0 To 20
+              Gosub lmtrf
+          Next
+
+        Else
+          'else a change
+          'increment index and set paststate to qtisr
+          index = index + 1
+          paststate = qtisl
+        Endif
+    Loop
+  Endif
+  Return
+
+  '850 to 650 max, 750 nospeed
+LmtrF:         '780
+  Pulsout lmtr, 810 'left
+  Return
+
+RmtrF:           '720
+  Pulsout rmtr, 690  'left
+  Return
+
+LmtrB:           '720
+  Pulsout lmtr, 690  'left
+  Return
+
+RmtrB:           '780
+  Pulsout rmtr, 810  'left
+  Return
+
+
+
+UpdateQtiS:
+  'updates QtiState
+  High Rqti
+  High Lqti
+  Pause 2
+  Input Rqti
+  Pause 0
+  Pause 0
+  Pause 0   'add more delay to increase distance/sensitivity
+  qtisr = Rqti
+  Input Lqti
+  Pause 0
+  Pause 0
+  Pause 0
+  qtisl = Lqti
+
+  'Debug ? qtisr
+  'Debug ? qtisl
+  'Pause 2000
+
+  'QtiS = %xxlr
+
+
+
+
+  Return
+
+
+
+init_lcd:
+  'spi_DC   pin 9    '1=Data, 0=CMD (for lcd)
+  'spi_writeb pin 8    'act low
+
+  'now stream in bytes until 00 from LCD_init
+  addr = lcd_init                'addr is start of block to send as cmd
+  Gosub lcd_CMDwriteBlock
+
+  Low spi_DC       'cmds
+  outl = %01000000
+  Gosub writeB
+
+
+  outl = %10000000
+  Gosub writeB
+
+
+
+  Return
+
+
+LcdDemo:
+  index2 = 1
+  Do While (index2 < $ff)
+    outl = $00
+    High spi_DC
+
+
+                 'param1 is byte to be sent
+    outl = index2
+    High spi_DC
+    For index = 0 To 503
+      Low spi_writeb
+      Toggle spi_writeb
+
+
+
+
+    Next
+    index2 = index2 * 2
+    index2 = index2+1
+
+    outl = index2
+    High spi_DC
+    For index = 0 To 503
+      Low spi_writeb
+      Toggle spi_writeb
+
+
+
+    Next
+    index2 = index2 * 2
+    index2 = index2+1
+
+
+
+
+
+  Loop
+
+  Gosub LCD_HOME
+
+
+
+  For param1 = $20 To $60
+     Gosub writecharlcd
+  Next
+
+  Gosub LCD_HOME
+
+  addr = WELCOME
+  Gosub LCDPrintString
+
+  Pause 5000
+
+  Low spi_DC       'cmds
+  outl = %00100011
+  Gosub writeB
+
+  High spi_DC
+  addr = LOGO
+  For index = 0 To 503
+    Read (LOGO + index), outl
+    Gosub WriteB
+  Next
+
+  Low spi_DC       'cmds
+  outl = %00100011
+  Gosub WriteB
+
+  High spi_DC
+
+  Return
+
+
+
+
+lcd_CMDwriteBlock:
+  Low spi_DC
+lcd_CMDwriteBlock2:
+  Read addr, param1     'reads from address param1, puts in param2
+  If (param1 = $00) Then
+    Return
+  Else
+    outl = param1
+    Gosub writeB
+    addr = addr + 1
+  Endif
+  Goto lcd_CMDwriteBlock2
+
+lcd_DATwriteBlock:
+  High spi_DC
+lcd_DATwriteBlock2:
+  Read addr, param1     'reads from address param1, puts in param2
+  If (param1 = $F0) Then
+    addr = addr + 1
+    Read addr, param1
+    If (param1 = $99) Then
+      Return
+    Else
+      addr = addr - 1
+      Read addr, param1
+    Endif
+  Else
+    outl = param1
+   Low spi_writeb
+    High spi_writeb
+    addr = addr + 1
+  Endif
+  Goto lcd_DATwriteBlock2
+
+
+LCDPrintString:
+  param1 = 0
+  Read addr, param1
+  Do
+    Read addr, param1
+    Gosub writecharlcd
+
+    addr = addr + 1
+    Read addr, param1
+  Loop Until param1 = 00
+  Return
+
+LCD_HOME:
+  outl = %01000000
+  Low spi_DC       'cmds
+
+  Gosub writeB
+
+  outl = %10000000
+  Gosub writeB
+  High spi_DC      'cmds end
+  Return
+
+
+
+writecharlcd:
+  'param1 has askii char to write, use as address into chartables below
+  'name table is 14 patterns horiz by 6 vertical, so 84 total
+  'pattern table is 6hx8v
+  'only stream thischar to screen
+
+  index2 = ((param1 - $20) * 6)
+  For index = 0 To 5
+    Read asciichars+index2+index, pattern
+    outl = pattern
+    Gosub writeB
+  Next
+  Return
+
+writeB:
+  Low spi_writeb
+  High spi_writeb
+  Return
+
+
+
+
+'tables for lcd bitmaps start at $0020
+patterntable:
+asciichars Data @$0005,
+           $00,       $00,       $00,       $00,       $00,       $00, '
+           $00,       $00,       %01011111, $00,       $00,       $00, '!
+           $00,       %00000111, $00,       %00000111, $00,       $00, '"
+           %00010100, %01111111, %00010100, %01111111, %00010100, $00, '#
+           %01000100, %01001010, %01111111, %00101010, %00010010, $00, '$
+           %00100011, %00010011, %00001000, %01100100, %01100010, $00, '%
+           %00110110, %01001001, %01010110, %00100000, %01010000, $00, '&
+           $00,       $00,       %00000111, $00,       $00,       $00, '<singlequote>
+           %00011100, %00100010, %01000001, $00,       $00,       $00, '(
+           $00,       $00,       %01000001, %00100010, %00011100, $00, ')
+           %00100010, %00010100, %01111111, %00010100, %00100010, $00, '*
+           %00001000, %00001000, %00111110, %00001000, %00001000, $00, '+
+           $00,       %01000000, %00110000, $00,       $00,       $00, ',
+           %00001000, %00001000, %00001000, %00001000, %00001000, $00, '-
+           $00,       %01000000, $00,       $00,       $00,       $00, '.
+           %00100000, %00010000, %00001000, %00000100, %00000010, $00, '/
+           %00111110, %01010001, %01001001, %01000101, %00111110, $00, '0
+           $00,       %01000010, %01111111, %01000000, $00,       $00, '1
+           %01100010, %01010001, %01001001, %01001001, %01000110, $00, '2
+           %00100001, %01000001, %01001001, %01001101, %00110011, $00, '3
+           %00011000, %00010100, %00010010, %01111111, %00010000, $00, '4
+           %00100111, %01000101, %01000101, %01000101, %00111001, $00, '5
+           %00111100, %01001010, %01001001, %01001001, %00110001, $00, '6
+           %00000001, %01110001, %00001001, %00000101, %00000011, $00, '7
+           %00110110, %01001001, %01001001, %01001001, %00110110, $00, '8
+           %01000110, %01001001, %01001001, %00101001, %00011110, $00, '9
+           $00, $00, %00010100, $00, $00, $00,                         ':
+           $00, %01000000, %00110100, $00, $00, $00,                   ';
+           %00001000, %00010100, %00100010, %01000001, $00, $00,       '<
+           %00010100, %00010100, %00010100, %00010100, %00010100, $00, '=
+           $00, %01000001, %00100010, %00010100, %00001000, $00,       '>
+           %00000010, %00000001, %01011001, %00000101, %00000010, $00, '?
+           %00111110, %01000001, %01011101, %01011001, %01001110, $00, '@
+           %01111100, %00010010, %00010001, %00010010, %01111100, $00, 'A
+           %01111111, %01001001, %01001001, %01001001, %00110110, $00, 'B
+           %00111110, %01000001, %01000001, %01000001, %00100010, $00, 'C
+           %01111111, %01000001, %01000001, %01000001, %00111110, $00, 'D
+           %01111111, %01001001, %01001001, %01001001, %01000001, $00, 'E
+           %01111111, %00001001, %00001001, %00001001, %00000001, $00, 'F
+           %00111110, %01000001, %01000001, %01010001, %01110001, $00, 'G
+           %01111111, %00001000, %00001000, %00001000, %01111111, $00, 'H
+           %00000000, %01000001, %01111111, %01000001, %00000000, $00, 'I
+           %00100000, %01000000, %01000000, %01000000, %00111111, $00, 'J
+           %01111111, %00001000, %00010100, %00100010, %01000001, $00, 'K
+           %01111111, %01000000, %01000000, %01000000, %01000000, $00, 'L
+           %01111111, %00000010, %00001100, %00000010, %01111111, $00, 'M
+           %01111111, %00000100, %00001000, %00010000, %01111111, $00, 'N
+           %00111110, %01000001, %01000001, %01000001, %00111110, $00, 'O
+           %01111111, %00001001, %00001001, %00001001, %00000110, $00, 'P
+           %00111110, %01000001, %01010001, %00100001, %01011110, $00, 'Q
+           %01111111, %00001001, %00011001, %00101001, %01000110, $00, 'R
+           %00100110, %01001001, %01001001, %01001001, %00110010, $00, 'S
+           %00000001, %00000001, %01111111, %00000001, %00000001, $00, 'T
+           %00111111, %01000000, %01000000, %01000000, %00111111, $00, 'U
+           %00011111, %00100000, %01000000, %00100000, %00011111, $00, 'V
+           %01111111, %00100000, %00011000, %00100000, %01111111, $00, 'W
+           %01100011, %00010100, %00001000, %00010100, %01100011, $00, 'X
+           %00000011, %00000100, %01111000, %00000100, %00000011, $00, 'Y
+           %01100001, %01010001, %01001001, %01000101, %01000011, $00, 'Z
+           %01111111, %01111111, %01000001, %01000001, %01000001, $00, '[
+           %00000010, %00000100, %00001000, %00010000, %00100000, $00, '\
+           %01000001, %01000001, %01000001, %01111111, %01111111, $00, ']
+           %00010000, %00001000, %00000100, %00001000, %00010000, $00, '^
+           %10000000, %10000000, %10000000, %10000000, %10000000, $00, '_
+           %00000000, %00000001, %00000010, %00000100, $00, $00       '`
+
+
+
+LOGO   Data $FF, $FF, $FF, $EE, $FF, $FF, $FF, $EE, $FF, $FF, $FF, $FE
+  Data $FF, $8B, $D5, $80, $D5, $A2, $55, $88, $55, $3A, $FD, $FE
+  Data $FF, $FE, $FF, $FE, $FF, $BE, $DF, $9E, $57, $32, $55, $02
+  Data $55, $22, $55, $88, $55, $0A, $45, $80, $D5, $82, $05, $08
+  Data $15, $22, $55, $08, $55, $22, $55, $80, $55, $22, $55, $08
+  Data $55, $22, $55, $00, $55, $20, $55, $00, $55, $20, $55, $00
+  Data $55, $02, $55, $00, $55, $00, $54, $00, $15, $02, $55, $00
+  Data $FF, $FB, $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF
+  Data $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FE
+  Data $FF, $FF, $FF, $FF, $FF, $FE, $7D, $38, $3D, $3A, $1D, $00
+  Data $55, $02, $41, $00, $01, $A0, $FF, $FF, $FF, $AF, $F7, $EE
+  Data $7F, $B8, $F0, $A0, $71, $A2, $55, $A8, $7D, $AA, $55, $AA
+  Data $75, $AA, $55, $A8, $75, $AA, $D5, $AA, $F7, $AA, $DD, $AA
+  Data $F7, $AA, $5D, $2A, $77, $2A, $5D, $2A, $7D, $00, $44, $00
+  Data $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF, $EF
+  Data $FF, $EF, $FF, $EF, $7F, $AF, $FF, $AF, $7F, $AF, $DF, $AF
+  Data $FF, $AB, $5F, $AB, $7F, $2F, $5F, $2E, $77, $23, $7F, $2F
+  Data $37, $2B, $57, $AA, $7F, $AF, $5F, $0B, $17, $0A, $05, $0A
+  Data $07, $02, $45, $02, $17, $0A, $FD, $82, $07, $02, $05, $02
+  Data $07, $0A, $7D, $EA, $FF, $BA, $FF, $EE, $FF, $BE, $FD, $EE
+  Data $FF, $BB, $FF, $EE, $FF, $B2, $F4, $C0, $D5, $80, $C4, $80
+  Data $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FF, $FD, $EA
+  Data $FF, $AA, $FD, $EA, $FF, $FA, $FD, $EA, $FF, $FE, $F7, $80
+  Data $01, $00, $00, $00, $01, $00, $50, $E0, $81, $00, $00, $00
+  Data $02, $00, $04, $02, $07, $02, $01, $00, $00, $00, $00, $00
+  Data $01, $00, $00, $00, $C0, $F8, $FF, $FE, $10, $00, $00, $00
+  Data $00, $00, $00, $00, $57, $AB, $5F, $EE, $FF, $BB, $FF, $EE
+  Data $FF, $BB, $FF, $EE, $FF, $BB, $FF, $EE, $FF, $BB, $FF, $FF
+  Data $FF, $FF, $FF, $EF, $FF, $FF, $FF, $EF, $FF, $FF, $FF, $EE
+  Data $FF, $FF, $FF, $EE, $FF, $FF, $FF, $EE, $FF, $FF, $FF, $EE
+  Data $F7, $A8, $5C, $A0, $71, $A0, $40, $00, $17, $AE, $7C, $3C
+  Data $7C, $38, $5C, $08, $1C, $08, $5C, $0C, $14, $00, $44, $00
+  Data $10, $02, $41, $01, $51, $21, $05, $00, $40, $00, $C0, $80
+  Data $FF, $FF, $FF, $EE, $FF, $FF, $FF, $EE, $FF, $FF, $FF, $FE
+  Data $FF, $8B, $D5, $80, $D5, $A2, $55, $88, $55, $3A, $FD, $FE
+  Data $FF, $FE, $FF, $FE, $FF, $BE, $DF, $9E, $57, $32, $55, $02
+  Data $55, $22, $55, $88, $55, $0A, $45, $80, $D5, $82, $05, $08
+  Data $7F, $B8, $F0, $A0, $71, $A2, $55, $A8, $7D, $AA, $55, $AA
+
+WELCOME  Data "GREETINGS FROM",
+              "     TEAM     ",
+              "    SILICON   ",
+              "  CRUSADERS!  ",
+              "--------------",
+              "LKE-MRTN-JERMY", $00
+
+LCD_init Data $20,$c0,$07,$13,$20,$0c,$00   'starts by toggling reset, if00 then end
+'lcdChar tables below code array of, for entire screen we need 63  \
